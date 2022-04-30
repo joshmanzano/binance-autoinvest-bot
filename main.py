@@ -1,6 +1,8 @@
 from binance import Client
 from dotenv import load_dotenv
 import os
+import schedule
+import time
 from tqdm import tqdm
 
 load_dotenv()
@@ -10,13 +12,7 @@ api_secret = os.getenv('API_SECRET').strip()
 
 client = Client(api_key, api_secret)
 
-try:
-    client.ping()
-    status = client.get_system_status()
-    print("Bot status: Running")
-    print("Server status:",status['msg'])
-except:
-    print('Down!')
+choices = ['BTC','ETH','BNB','NEXO','ADA','ALGO','XTZ']
 
 def get_account_data():
     busd = client.get_asset_balance(asset='BUSD')['free']
@@ -33,42 +29,56 @@ def get_data(symbol):
 def get_price_change(e):
     return e[0]
 
-choices = ['BTC','ETH','BNB','NEXO','ADA','ALGO','XTZ']
-data = []
-num_choices = len(choices)
-lump_sum_limit = 99
+def order_cycle():
 
-balance = get_account_data()
-for choice in choices:
-    new_data = get_data(choice+'BUSD')
-    if new_data[0] < 0:
-        new_data[0] = abs(new_data[0])
-        data.append(new_data)
+    print('Starting order cycle..')
+    try:
+        client.ping()
+        status = client.get_system_status()
+        print("Server status:",status['msg'])
+    except:
+        print('Server is down!')
+        return False
 
-data.sort(reverse=True, key=get_price_change)
+    data = []
+    num_choices = len(choices)
+    lump_sum_limit = 99
 
-price_changes = [d[0] for d in data]
+    balance = get_account_data()
+    for choice in choices:
+        new_data = get_data(choice+'BUSD')
+        if new_data[0] < 0:
+            new_data[0] = abs(new_data[0])
+            data.append(new_data)
 
-if sum(price_changes) > lump_sum_limit:
-    oldMax = max(price_changes)
-    oldMin = min(price_changes)
-    oldRange = (oldMax - oldMin)
-    newMin = 1
-    newMax = lump_sum_limit / num_choices
-    newRange = (newMax - newMin)
+    data.sort(reverse=True, key=get_price_change)
+
+    price_changes = [d[0] for d in data]
+
+    if sum(price_changes) > lump_sum_limit:
+        oldMax = max(price_changes)
+        oldMin = min(price_changes)
+        oldRange = (oldMax - oldMin)
+        newMin = 1
+        newMax = lump_sum_limit / num_choices
+        newRange = (newMax - newMin)
+        for d in data:
+            d[0] = (((d[0] - oldMin) * newRange) / oldRange) + newMin
+
+    orders = []
+
     for d in data:
-        d[0] = (((d[0] - oldMin) * newRange) / oldRange) + newMin
+        order_size = balance * (d[0]/100)
+        if order_size > 0.99:
+            orders.append([d[1], order_size])
 
-orders = []
+    for order in orders:
+        print(f'Market order for ${round(order[1])} of {order[0]}') 
+    
+    return True
 
-for d in data:
-    order_size = balance * (d[0]/100)
-    if order_size > 0.99:
-        orders.append([d[1], order_size])
+schedule.every(1).minutes.do(order_cycle)
 
-for order in orders:
-    print(f'Market order for ${round(order[1])} of {order[0]}') 
-
-
-
-
+while True:
+    schedule.run_pending()
+    time.sleep(1)
